@@ -22,3 +22,11 @@ Issues = "https://github.com/faisaljs/PyLauncher/issues"
 
 [tool.setuptools.packages.find]
 include = ["pylauncher*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
