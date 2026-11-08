@@ -1,4 +1,8 @@
-# PyLauncher
+<p align="center">
+  <img src="assets/logo.png" alt="PyLauncher logo" width="260">
+</p>
+
+<h1 align="center">PyLauncher</h1>
 
 A from-scratch Minecraft Java Edition launcher supporting offline accounts.
 Written in pure Python. No wrapper libraries, no Mojang launcher code — just

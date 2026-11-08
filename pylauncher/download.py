@@ -78,16 +78,18 @@ def download_client(version_data: dict, game_dir: Path) -> tuple:
     return path, downloaded
 
 
-def download_libraries(version_data: dict, game_dir: Path) -> tuple:
+def download_libraries(version_data: dict, game_dir: Path, progress_cb=None) -> tuple:
     libs = game_dir / "libraries"
     natives = game_dir / "natives" / version_data["id"]
     natives.mkdir(parents=True, exist_ok=True)
 
     cached = downloaded = 0
+    allowed = [l for l in version_data.get("libraries", []) if rules_allow(l.get("rules", []))]
+    total = len(allowed)
 
-    for lib in version_data.get("libraries", []):
-        if not rules_allow(lib.get("rules", [])):
-            continue
+    for i, lib in enumerate(allowed, 1):
+        if progress_cb:
+            progress_cb(i, total)
 
         g, a, v, _ = parse_library_name(lib["name"])
         dl = lib.get("downloads", {})
@@ -130,7 +132,7 @@ def download_libraries(version_data: dict, game_dir: Path) -> tuple:
     return cached, downloaded
 
 
-def download_assets(version_data: dict, game_dir: Path, verbose: bool = True) -> tuple:
+def download_assets(version_data: dict, game_dir: Path, verbose: bool = True, progress_cb=None) -> tuple:
     info = version_data.get("assetIndex")
     if not info:
         return 0, 0
@@ -160,6 +162,8 @@ def download_assets(version_data: dict, game_dir: Path, verbose: bool = True) ->
             downloaded += 1
         else:
             cached += 1
+        if progress_cb:
+            progress_cb(i, total)
         if verbose and (i % 500 == 0 or i == total):
             print(f"    {i}/{total}")
 

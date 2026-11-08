@@ -1,0 +1,14 @@
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+from .main_window import MainWindow
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("PyLauncher")
+    app.setOrganizationName("PyLauncher")
+    window = MainWindow()
+    window.show()
+    return app.exec()

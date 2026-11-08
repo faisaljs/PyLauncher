@@ -41,33 +41,48 @@ def required_java_major(version_data: dict) -> int:
     return version_data.get("javaVersion", {}).get("majorVersion", 8)
 
 
-def install(version_id: str, game_dir: Path = None, quiet: bool = False) -> None:
+def install(version_id: str, game_dir: Path = None, quiet: bool = False, progress_cb=None) -> None:
     game_dir = Path(game_dir) if game_dir else DEFAULT_GAME_DIR
     game_dir.mkdir(parents=True, exist_ok=True)
+
+    def emit(stage: str, current: int, total: int):
+        if progress_cb:
+            progress_cb(stage, current, total)
 
     if not quiet:
         print(f"Installing Minecraft {version_id}")
         print(f"  game dir: {game_dir}")
 
+    emit("manifest", 0, 1)
     manifest = fetch_manifest(game_dir)
     version_data = fetch_version(version_id, manifest, game_dir)
 
     if not quiet:
         print("  downloading client jar...")
+    emit("client", 0, 1)
     _, dl = download_client(version_data, game_dir)
+    emit("client", 1, 1)
 
     if not quiet:
         print("  downloading libraries + natives...")
-    lib_cached, lib_dl = download_libraries(version_data, game_dir)
+    def lib_progress(c, t):
+        emit("libraries", c, t)
+    lib_cached, lib_dl = download_libraries(version_data, game_dir, progress_cb=lib_progress)
     if not quiet:
         print(f"    {lib_cached} cached, {lib_dl} downloaded")
 
     if not quiet:
         print("  downloading assets...")
-    a_cached, a_dl = download_assets(version_data, game_dir, verbose=not quiet)
+    def asset_progress(c, t):
+        emit("assets", c, t)
+    a_cached, a_dl = download_assets(
+        version_data, game_dir, verbose=not quiet, progress_cb=asset_progress
+    )
     if not quiet:
         print(f"    {a_cached} cached, {a_dl} downloaded")
         print(f"Done. {version_id} is ready to launch.")
+
+    emit("done", 1, 1)
 
 
 def launch(
@@ -77,15 +92,29 @@ def launch(
     java: str = "java",
     memory_mb: int = 2048,
     auto_install: bool = True,
+    stream_cb=None,
 ) -> int:
     game_dir = Path(game_dir) if game_dir else DEFAULT_GAME_DIR
 
+    def out(line: str):
+        if stream_cb:
+            stream_cb(line.rstrip("\n"))
+        else:
+            print(line, end="")
+
     if version_id not in list_installed(game_dir):
         if not auto_install:
-            print(f"Version {version_id} is not installed. Run: pylauncher install {version_id}",
-                  file=sys.stderr)
+            msg = f"Version {version_id} is not installed. Run: pylauncher install {version_id}"
+            if stream_cb:
+                stream_cb(msg)
+            else:
+                print(msg, file=sys.stderr)
             return 1
-        print(f"Version {version_id} not installed. Installing first...")
+        msg = f"Version {version_id} not installed. Installing first..."
+        if stream_cb:
+            stream_cb(msg)
+        else:
+            print(msg)
         install(version_id, game_dir)
 
     manifest = fetch_manifest(game_dir)
@@ -94,12 +123,15 @@ def launch(
     required = required_java_major(version_data)
     actual = detect_java_major(java)
     if actual is not None and actual < required:
-        print(
+        msg = (
             f"Warning: {version_id} requires Java {required}+, "
             f"but '{java}' is Java {actual}. "
-            f"Use --java to point at a newer JDK.",
-            file=sys.stderr,
+            f"Use --java to point at a newer JDK."
         )
+        if stream_cb:
+            stream_cb(msg)
+        else:
+            print(msg, file=sys.stderr)
 
     uuid = offline_uuid(username)
     natives = game_dir / "natives" / version_id
@@ -109,10 +141,33 @@ def launch(
 
     cmd = [java] + jvm + [main_class] + game
 
-    print(f"Launching {version_id} as {username} (uuid {uuid})")
+    banner = f"Launching {version_id} as {username} (uuid {uuid})"
+    if stream_cb:
+        stream_cb(banner)
+    else:
+        print(banner)
+
     try:
-        proc = subprocess.run(cmd, cwd=str(game_dir))
-        return proc.returncode
+        if stream_cb is None:
+            proc = subprocess.run(cmd, cwd=str(game_dir))
+            return proc.returncode
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(game_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        for line in proc.stdout:
+            stream_cb(line.rstrip("\n"))
+        return proc.wait()
+
     except FileNotFoundError:
-        print(f"Java not found: '{java}'. Use --java to point at a JDK.", file=sys.stderr)
+        msg = f"Java not found: '{java}'. Use --java to point at a JDK."
+        if stream_cb:
+            stream_cb(msg)
+        else:
+            print(msg, file=sys.stderr)
         return 1
