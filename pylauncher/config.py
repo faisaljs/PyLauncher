@@ -6,6 +6,7 @@ DEFAULT_CONFIG = {
     "default_version": "1.20.4",
     "memory_mb": 2048,
     "java": "java",
+    "per_version": {},
 }
 
 
@@ -24,6 +25,7 @@ def load_config() -> dict:
         return dict(DEFAULT_CONFIG)
     merged = dict(DEFAULT_CONFIG)
     merged.update(data)
+    merged.setdefault("per_version", {})
     return merged
 
 
@@ -41,3 +43,26 @@ def set_value(key: str, value: str) -> None:
     else:
         cfg[key] = value
     save_config(cfg)
+
+
+def effective_settings(cfg: dict, version_id: str) -> dict:
+    base = {
+        "java": cfg.get("java", "java"),
+        "memory_mb": cfg.get("memory_mb", 2048),
+    }
+    override = cfg.get("per_version", {}).get(version_id, {})
+    base.update({k: v for k, v in override.items() if v is not None})
+    return base
+
+
+def set_version_override(cfg: dict, version_id: str, java: str = None, memory_mb: int = None) -> dict:
+    per = dict(cfg.get("per_version", {}))
+    entry = dict(per.get(version_id, {}))
+    if java is not None:
+        entry["java"] = java
+    if memory_mb is not None:
+        entry["memory_mb"] = memory_mb
+    per[version_id] = entry
+    cfg = dict(cfg)
+    cfg["per_version"] = per
+    return cfg

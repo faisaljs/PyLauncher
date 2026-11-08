@@ -4,7 +4,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,8 +16,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import load_config, save_config
-from ..launcher import DEFAULT_GAME_DIR
+from ..config import (
+    effective_settings,
+    load_config,
+    save_config,
+    set_version_override,
+)
+from ..launcher import (
+    DEFAULT_GAME_DIR,
+    detect_java_major,
+    required_java_major,
+)
+from ..manifest import fetch_manifest, fetch_version
+from .java_discovery import discover_java
 from .log_panel import LogPanel
 from .settings_dialog import SettingsDialog
 from .version_list import VersionListWidget
@@ -29,7 +39,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyLauncher")
-        self.resize(920, 640)
+        self.resize(960, 680)
 
         self.game_dir = DEFAULT_GAME_DIR
         self.cfg = load_config()
@@ -44,6 +54,11 @@ class MainWindow(QMainWindow):
         self.bridge.versions_loaded.connect(self._on_versions_loaded)
 
         self._busy = False
+        self._version_data_cache = {}
+        self._manifest = None
+        self._selected = ("", False)
+        self._discovered_java = discover_java()
+
         self._build_ui()
         self._load_versions()
 
@@ -61,11 +76,25 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         self.username_edit = QLineEdit(self.cfg.get("username", "Player"))
         self.memory_edit = QLineEdit(str(self.cfg.get("memory_mb", 2048)))
-        self.java_edit = QLineEdit(self.cfg.get("java", "java"))
+
+        self.java_combo = QComboBox()
+        self.java_combo.setEditable(True)
+        self._populate_java_combo(self.cfg.get("java", "java"))
+        self.java_combo.currentTextChanged.connect(self._on_java_changed)
+
         form.addRow("Username:", self.username_edit)
         form.addRow("Memory (MB):", self.memory_edit)
-        form.addRow("Java:", self.java_edit)
+        form.addRow("Java:", self.java_combo)
         play_layout.addLayout(form)
+
+        self.java_banner = QLabel("")
+        self.java_banner.setWordWrap(True)
+        self.java_banner.setVisible(False)
+        self.java_banner.setStyleSheet(
+            "QLabel { background-color: #4a1a1a; color: #ffb3b3; "
+            "padding: 8px; border-radius: 4px; }"
+        )
+        play_layout.addWidget(self.java_banner)
 
         self.play_button = QPushButton("PLAY")
         self.play_button.setMinimumHeight(48)
@@ -104,10 +133,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(main)
 
         toolbar = self.addToolBar("Main")
-        settings_action = toolbar.addAction("Settings")
-        settings_action.triggered.connect(self._on_settings)
-        reload_action = toolbar.addAction("Reload Versions")
-        reload_action.triggered.connect(self._load_versions)
+        toolbar.addAction("Settings").triggered.connect(self._on_settings)
+        toolbar.addAction("Reload Versions").triggered.connect(self._load_versions)
+        toolbar.addAction("Rescan Java").triggered.connect(self._rescan_java)
+
+    def _populate_java_combo(self, current: str) -> None:
+        self.java_combo.blockSignals(True)
+        self.java_combo.clear()
+        candidates = list(self._discovered_java)
+        if current and current not in candidates:
+            candidates.insert(0, current)
+        if not candidates:
+            candidates = [current or "java"]
+        for c in candidates:
+            self.java_combo.addItem(c)
+        idx = self.java_combo.findText(current)
+        if idx >= 0:
+            self.java_combo.setCurrentIndex(idx)
+        else:
+            self.java_combo.setEditText(current)
+        self.java_combo.blockSignals(False)
+
+    def _rescan_java(self) -> None:
+        current = self.java_combo.currentText()
+        self._discovered_java = discover_java()
+        self._populate_java_combo(current)
+        self.log_panel.append(f"[P] Rescanned Java: {len(self._discovered_java)} candidates")
 
     def _load_versions(self) -> None:
         self.status_label.setText("Loading versions...")
@@ -116,19 +167,98 @@ class MainWindow(QMainWindow):
     def _on_versions_loaded(self, rows: list) -> None:
         self.version_list.set_versions(rows)
         self.status_label.setText(f"{len(rows)} versions available.")
-        installed_count = sum(1 for _, _, installed in rows if installed)
+        installed_count = sum(1 for _, _, i in rows if i)
         self.log_panel.append(f"[P] Loaded {len(rows)} versions ({installed_count} installed)")
 
     def _on_version_selected(self, version_id: str, installed: bool) -> None:
         if self._busy:
             return
+        self._selected = (version_id, installed)
         self.play_button.setText("PLAY" if installed else "INSTALL")
+
+        eff = effective_settings(self.cfg, version_id)
+        self.memory_edit.setText(str(eff["memory_mb"]))
+
+        data = self._load_version_data(version_id)
+        chosen = eff["java"]
+        if data is not None:
+            required = required_java_major(data)
+            current_major = detect_java_major(chosen)
+            if current_major is None or current_major < required:
+                better = self._find_java_for(required)
+                if better:
+                    chosen = better
+                    self.log_panel.append(
+                        f"[P] Auto-selected {chosen} for {version_id} (needs Java {required}+)"
+                    )
+
+        idx = self.java_combo.findText(chosen)
+        if idx >= 0:
+            self.java_combo.setCurrentIndex(idx)
+        else:
+            self.java_combo.setEditText(chosen)
+
         self.status_label.setText(
             f"{version_id} — {'installed' if installed else 'not installed'}"
         )
+        self._update_java_banner(version_id)
+
+    def _find_java_for(self, required_major: int):
+        for path in self._discovered_java:
+            major = detect_java_major(path)
+            if major is not None and major >= required_major:
+                return path
+        return None
+
+    def _load_version_data(self, version_id: str):
+        if version_id in self._version_data_cache:
+            return self._version_data_cache[version_id]
+        try:
+            if self._manifest is None:
+                self._manifest = fetch_manifest(self.game_dir)
+            data = fetch_version(version_id, self._manifest, self.game_dir)
+            self._version_data_cache[version_id] = data
+            return data
+        except Exception as e:
+            self.log_panel.append(f"[P] Could not load version JSON for {version_id}: {e}")
+            return None
+
+    def _update_java_banner(self, version_id: str) -> None:
+        if not version_id:
+            self.java_banner.setVisible(False)
+            return
+        data = self._load_version_data(version_id)
+        if data is None:
+            self.java_banner.setVisible(False)
+            return
+
+        required = required_java_major(data)
+        java_path = self.java_combo.currentText() or "java"
+        actual = detect_java_major(java_path)
+
+        if actual is None:
+            self.java_banner.setText(
+                f"Java not found at '{java_path}'. Pick a valid JDK from the list."
+            )
+            self.java_banner.setVisible(True)
+            return
+
+        if actual < required:
+            self.java_banner.setText(
+                f"{version_id} requires Java {required}+ but '{java_path}' is Java {actual}. "
+                f"No matching JDK found in scanned paths. Install JDK {required} to play this version."
+            )
+            self.java_banner.setVisible(True)
+        else:
+            self.java_banner.setVisible(False)
+
+    def _on_java_changed(self, _text: str) -> None:
+        version_id, _ = self._selected
+        if version_id:
+            self._update_java_banner(version_id)
 
     def _selected_version(self) -> tuple:
-        return self.version_list.current_version()
+        return self._selected
 
     def _on_play_clicked(self) -> None:
         if self._busy:
@@ -144,13 +274,16 @@ class MainWindow(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "PyLauncher", "Memory must be a number.")
             return
-        java = self.java_edit.text().strip() or "java"
+        java = self.java_combo.currentText().strip() or "java"
 
         self._busy = True
         self.play_button.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setValue(0)
-        self._save_config(username, memory, java)
+
+        self.cfg["username"] = username
+        self.cfg = set_version_override(self.cfg, version_id, java=java, memory_mb=memory)
+        save_config(self.cfg)
 
         if installed:
             self._start_launch(version_id, username, java, memory)
@@ -166,8 +299,7 @@ class MainWindow(QMainWindow):
         self.play_button.setText("RUNNING...")
         self.log_panel.append(f"[P] Launching {version_id} as {username}...")
         self.pool.submit(
-            run_launch,
-            self.bridge, version_id, username, self.game_dir, java, memory,
+            run_launch, self.bridge, version_id, username, self.game_dir, java, memory,
         )
 
     def _on_progress(self, stage: str, current: int, total: int) -> None:
@@ -204,16 +336,9 @@ class MainWindow(QMainWindow):
     def _reset_after_job(self) -> None:
         self._busy = False
         self.play_button.setEnabled(True)
-        version_id, installed = self._selected_version()
+        version_id, installed = self._selected
         self.play_button.setText("PLAY" if installed else "INSTALL")
-        if self.progress.value() >= self.progress.maximum() or not self._busy:
-            self.progress.setVisible(False)
-
-    def _save_config(self, username: str, memory: int, java: str) -> None:
-        self.cfg["username"] = username
-        self.cfg["memory_mb"] = memory
-        self.cfg["java"] = java
-        save_config(self.cfg)
+        self.progress.setVisible(False)
 
     def _on_settings(self) -> None:
         dlg = SettingsDialog(self.cfg, self)
@@ -222,7 +347,7 @@ class MainWindow(QMainWindow):
             save_config(self.cfg)
             self.username_edit.setText(self.cfg.get("username", "Player"))
             self.memory_edit.setText(str(self.cfg.get("memory_mb", 2048)))
-            self.java_edit.setText(self.cfg.get("java", "java"))
+            self._populate_java_combo(self.cfg.get("java", "java"))
 
     def closeEvent(self, event) -> None:
         self.pool.shutdown()
