@@ -1,5 +1,3 @@
-"""User configuration stored at ~/.pylauncher/config.json."""
-
 import json
 from pathlib import Path
 

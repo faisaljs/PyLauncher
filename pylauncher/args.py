@@ -1,5 +1,3 @@
-"""Build the classpath, JVM arguments, and game arguments for a launch."""
-
 import os
 from pathlib import Path
 
@@ -59,7 +57,6 @@ def build_jvm_args(version_data: dict, game_dir: Path, natives_dir: Path, memory
                 elif isinstance(val, list):
                     args.extend(_replace(x, repl) for x in val)
 
-    # Pre-1.13 versions have no arguments.jvm; build it manually.
     if not raw:
         args.append(f"-Djava.library.path={natives_dir}")
         args.extend(["-cp", classpath])

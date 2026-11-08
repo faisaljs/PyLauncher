@@ -1,11 +1,9 @@
-"""Command-line interface for PyLauncher."""
-
 import argparse
 import sys
 from pathlib import Path
 
 from . import __version__
-from .config import load_config, save_config, set_value
+from .config import load_config, set_value
 from .launcher import DEFAULT_GAME_DIR, install, launch, list_installed
 from .manifest import fetch_manifest
 
@@ -41,9 +39,16 @@ def cmd_list(args) -> int:
 def cmd_available(args) -> int:
     game_dir = Path(args.dir) if args.dir else DEFAULT_GAME_DIR
     manifest = fetch_manifest(game_dir, refresh=args.refresh)
-    print(f"{'ID':<24} {'TYPE':<12} RELEASED")
-    for v in manifest["versions"]:
-        print(f"{v['id']:<24} {v['type']:<12} {v['releaseTime'][:10]}")
+    installed = set(list_installed(game_dir))
+
+    versions = manifest["versions"]
+    if args.type:
+        versions = [v for v in versions if v["type"] == args.type]
+
+    print(f"{'':2}{'ID':<24} {'TYPE':<12} RELEASED")
+    for v in versions:
+        marker = "*" if v["id"] in installed else " "
+        print(f"{marker:<2}{v['id']:<24} {v['type']:<12} {v['releaseTime'][:10]}")
     return 0
 
 
@@ -73,14 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"PyLauncher {__version__}")
     sub = p.add_subparsers(dest="command")
 
-    # install
     pi = sub.add_parser("install", help="Download everything for a version")
     pi.add_argument("version", help="Minecraft version, e.g. 1.20.4")
     pi.add_argument("--dir", "-d", help="Game directory (default ~/.pylauncher)")
     pi.add_argument("--quiet", "-q", action="store_true", help="Silence progress output")
     pi.set_defaults(func=cmd_install)
 
-    # launch
     pl = sub.add_parser("launch", help="Launch the game (installs if needed)")
     pl.add_argument("version", nargs="?", help="Minecraft version (default from config)")
     pl.add_argument("--username", "-u", help="Offline username (default from config)")
@@ -90,18 +93,18 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--no-install", action="store_true", help="Fail if version not installed")
     pl.set_defaults(func=cmd_launch)
 
-    # list
     pn = sub.add_parser("list", help="List installed versions")
     pn.add_argument("--dir", "-d")
     pn.set_defaults(func=cmd_list)
 
-    # available
     pa = sub.add_parser("available", help="List versions available from Mojang")
     pa.add_argument("--dir", "-d")
     pa.add_argument("--refresh", action="store_true", help="Force re-fetch the manifest")
+    pa.add_argument("--type", "-t",
+                    choices=["release", "snapshot", "old_beta", "old_alpha"],
+                    help="Filter by version type")
     pa.set_defaults(func=cmd_available)
 
-    # config
     pc = sub.add_parser("config", help="Get or set configuration")
     pc.add_argument("key", nargs="?")
     pc.add_argument("value", nargs="?")

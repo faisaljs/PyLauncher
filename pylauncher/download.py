@@ -1,8 +1,5 @@
-"""HTTP downloading with SHA1 verification, plus the concrete downloaders
-for the client jar, libraries, natives, and assets."""
-
 import hashlib
-import os
+import json
 import zipfile
 from pathlib import Path
 
@@ -12,7 +9,7 @@ from .rules import natives_arch, os_name, rules_allow
 
 LIBRARIES_BASE = "https://libraries.minecraft.net/"
 RESOURCES_BASE = "https://resources.download.minecraft.net/"
-USER_AGENT = "PyLauncher/0.1.0 (+https://github.com/)"
+USER_AGENT = "PyLauncher/0.1.0"
 
 
 def file_sha1(path: Path) -> str:
@@ -24,15 +21,10 @@ def file_sha1(path: Path) -> str:
 
 
 def download_file(url: str, dest: Path, sha1: str = None, retries: int = 3) -> bool:
-    """Download a file. Returns True if downloaded, False if already cached.
-
-    Raises RuntimeError on unrecoverable failure.
-    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and sha1 and file_sha1(dest) == sha1:
         return False
     if dest.exists() and not sha1:
-        # No hash to verify against — leave it alone.
         return False
 
     for attempt in range(retries):
@@ -52,9 +44,6 @@ def download_file(url: str, dest: Path, sha1: str = None, retries: int = 3) -> b
     return False
 
 
-# ----------------------------------------------------------------------
-# Library helpers
-# ----------------------------------------------------------------------
 def parse_library_name(name: str):
     parts = name.split(":")
     group, artifact, version = parts[0], parts[1], parts[2]
@@ -81,10 +70,7 @@ def _extract_natives(jar: Path, dest: Path, extract_rules: dict) -> None:
                 zf.extract(member, dest)
 
 
-# ----------------------------------------------------------------------
-# Concrete downloaders
-# ----------------------------------------------------------------------
-def download_client(version_data: dict, game_dir: Path) -> tuple[Path, bool]:
+def download_client(version_data: dict, game_dir: Path) -> tuple:
     v = version_data["id"]
     info = version_data["downloads"]["client"]
     path = game_dir / "versions" / v / f"{v}.jar"
@@ -92,11 +78,7 @@ def download_client(version_data: dict, game_dir: Path) -> tuple[Path, bool]:
     return path, downloaded
 
 
-def download_libraries(version_data: dict, game_dir: Path) -> tuple[int, int]:
-    """Download all allowed libraries and extract natives.
-
-    Returns (cached_count, downloaded_count).
-    """
+def download_libraries(version_data: dict, game_dir: Path) -> tuple:
     libs = game_dir / "libraries"
     natives = game_dir / "natives" / version_data["id"]
     natives.mkdir(parents=True, exist_ok=True)
@@ -110,47 +92,45 @@ def download_libraries(version_data: dict, game_dir: Path) -> tuple[int, int]:
         g, a, v, _ = parse_library_name(lib["name"])
         dl = lib.get("downloads", {})
         art = dl.get("artifact")
+        has_natives = "natives" in lib
 
-        # Main jar
         if art:
             main_path = libs / art["path"]
             ok = download_file(art["url"], main_path, sha1=art.get("sha1"))
+        elif has_natives:
+            ok = None
         else:
             main_path = libs / g.replace(".", "/") / a / v / f"{a}-{v}.jar"
             ok = download_file(library_url(g, a, v), main_path)
 
-        if ok:
+        if ok is True:
             downloaded += 1
-        else:
+        elif ok is False:
             cached += 1
 
-        # Natives
-        if "natives" in lib:
+        if has_natives:
             classifier = lib["natives"].get(os_name())
             if not classifier:
                 continue
             classifier = classifier.replace("${arch}", natives_arch())
 
-            if art and "classifiers" in dl and classifier in dl["classifiers"]:
-                nat = dl["classifiers"][classifier]
-                nat_path = libs / nat["path"]
-                download_file(nat["url"], nat_path, sha1=nat.get("sha1"))
-                _extract_natives(nat_path, natives, lib.get("extract", {}))
-            else:
-                nat_path = libs / g.replace(".", "/") / a / v / f"{a}-{v}-{classifier}.jar"
-                download_file(library_url(g, a, v, classifier), nat_path)
-                _extract_natives(nat_path, natives, lib.get("extract", {}))
+            try:
+                if art and "classifiers" in dl and classifier in dl["classifiers"]:
+                    nat = dl["classifiers"][classifier]
+                    nat_path = libs / nat["path"]
+                    download_file(nat["url"], nat_path, sha1=nat.get("sha1"))
+                    _extract_natives(nat_path, natives, lib.get("extract", {}))
+                else:
+                    nat_path = libs / g.replace(".", "/") / a / v / f"{a}-{v}-{classifier}.jar"
+                    download_file(library_url(g, a, v, classifier), nat_path)
+                    _extract_natives(nat_path, natives, lib.get("extract", {}))
+            except RuntimeError as e:
+                print(f"  warning: native unavailable for {lib['name']}: {e}")
 
     return cached, downloaded
 
 
-def download_assets(version_data: dict, game_dir: Path, verbose: bool = True) -> tuple[int, int]:
-    """Download the asset index and all referenced objects.
-
-    Returns (cached_count, downloaded_count).
-    """
-    import json
-
+def download_assets(version_data: dict, game_dir: Path, verbose: bool = True) -> tuple:
     info = version_data.get("assetIndex")
     if not info:
         return 0, 0

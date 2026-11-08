@@ -1,13 +1,8 @@
-"""Tests for pylauncher.rules — platform detection and rule evaluation."""
-
 import pytest
 
 from pylauncher import rules
 
 
-# ----------------------------------------------------------------------
-# os_name / natives_arch — real platform calls
-# ----------------------------------------------------------------------
 @pytest.mark.parametrize("system,expected", [
     ("Windows", "windows"),
     ("Darwin",  "osx"),
@@ -31,9 +26,6 @@ def test_natives_arch(monkeypatch, machine, expected):
     assert rules.natives_arch() == expected
 
 
-# ----------------------------------------------------------------------
-# arch_matches
-# ----------------------------------------------------------------------
 @pytest.mark.parametrize("machine,required,expected", [
     ("x86_64",  "x86_64", True),
     ("amd64",   "x86_64", True),
@@ -52,9 +44,6 @@ def test_arch_matches(monkeypatch, machine, required, expected):
     assert rules.arch_matches(required) is expected
 
 
-# ----------------------------------------------------------------------
-# rules_allow — monkeypatch os_name so tests are platform-independent
-# ----------------------------------------------------------------------
 @pytest.fixture
 def fake_linux(monkeypatch):
     monkeypatch.setattr(rules, "os_name", lambda: "linux")
@@ -97,22 +86,33 @@ def test_disallow_matching_os(fake_linux):
     assert rules.rules_allow([rule]) is False
 
 
-def test_first_match_wins(fake_linux):
-    # allow linux first — should return True even though the second rule disallows.
+def test_last_match_wins(fake_linux):
     rules_list = [
-        {"action": "allow",    "os": {"name": "linux"}},
+        {"action": "allow"},
+        {"action": "disallow", "os": {"name": "linux"}},
+    ]
+    assert rules.rules_allow(rules_list) is False
+
+
+def test_last_match_wins_windows(fake_windows):
+    rules_list = [
+        {"action": "allow"},
         {"action": "disallow", "os": {"name": "linux"}},
     ]
     assert rules.rules_allow(rules_list) is True
 
 
-def test_first_nonmatch_falls_through(fake_linux):
-    # First rule doesn't match; second does.
+def test_nonmatching_rules_use_default(fake_linux):
     rules_list = [
         {"action": "disallow", "os": {"name": "windows"}},
         {"action": "allow",    "os": {"name": "linux"}},
     ]
     assert rules.rules_allow(rules_list) is True
+
+
+def test_no_rules_match_defaults_to_disallow(fake_linux):
+    rules_list = [{"action": "allow", "os": {"name": "osx"}}]
+    assert rules.rules_allow(rules_list) is False
 
 
 def test_feature_gated_rule_rejected(fake_linux):

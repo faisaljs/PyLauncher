@@ -1,10 +1,7 @@
-"""Mojang library rule evaluation and platform detection."""
-
 import platform
 
 
 def os_name() -> str:
-    """Return Mojang's OS name string: 'windows', 'osx', or 'linux'."""
     s = platform.system().lower()
     if s == "windows":
         return "windows"
@@ -14,7 +11,6 @@ def os_name() -> str:
 
 
 def natives_arch() -> str:
-    """Architecture string used for ${arch} substitution in natives names."""
     m = platform.machine().lower()
     if m in ("aarch64", "arm64"):
         return "arm64"
@@ -24,7 +20,6 @@ def natives_arch() -> str:
 
 
 def arch_matches(required: str) -> bool:
-    """Check whether the local machine matches a rules[].os.arch value."""
     m = platform.machine().lower()
     if required == "x86":
         return m in ("i386", "i686", "x86")
@@ -40,7 +35,6 @@ def arch_matches(required: str) -> bool:
 
 
 def _rule_matches(rule: dict) -> bool:
-    """Check a single rule against the local platform."""
     os_rule = rule.get("os")
     if os_rule:
         if "name" in os_rule and os_rule["name"] != os_name():
@@ -48,16 +42,15 @@ def _rule_matches(rule: dict) -> bool:
         if "arch" in os_rule and not arch_matches(os_rule["arch"]):
             return False
     if rule.get("features"):
-        # We don't enable demo mode, custom resolution, quickplay, etc.
         return False
     return True
 
 
 def rules_allow(rules: list) -> bool:
-    """Evaluate a Mojang rules list. First matching rule wins."""
     if not rules:
         return True
+    result = False
     for rule in rules:
         if _rule_matches(rule):
-            return rule.get("action", "allow") == "allow"
-    return False
+            result = rule.get("action", "allow") == "allow"
+    return result

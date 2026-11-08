@@ -12,6 +12,7 @@ the manifest, the JSON, the HTTP, and the JVM command line.
 - Builds the exact JVM and game arguments Mojang expects
 - Caches everything — reinstalls are instant
 - Config file for username, default version, memory, and Java path
+- Works from 1.7.10 through current release
 
 ## Requirements
 
@@ -35,8 +36,9 @@ pip install -e .
 ## Usage
 
 ```bash
-# See available versions from Mojang
+# See available versions from Mojang (* = already installed)
 pylauncher available
+pylauncher available --type release
 
 # Install a version (downloads ~500MB–1GB into ~/.pylauncher)
 pylauncher install 1.20.4
@@ -67,10 +69,11 @@ pylauncher launch
 - `--memory, -m` — max heap in MB
 - `--no-install` — fail instead of auto-installing on launch
 - `--quiet, -q` — silence install progress
+- `--type, -t` — filter `available` by type: `release`, `snapshot`, `old_beta`, `old_alpha`
 
 ## How it works
 
-See the source. Each module has a single job:
+Each module has a single job:
 
 - `manifest.py` — fetch the Mojang version manifest and per-version JSON
 - `download.py` — HTTP, SHA1, library / native / asset / client downloaders
@@ -79,6 +82,13 @@ See the source. Each module has a single job:
 - `uuid.py` — offline UUID generation
 - `launcher.py` — orchestrate install and launch
 - `cli.py` — argparse subcommands
+
+## Testing
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
 
 ## Roadmap
 

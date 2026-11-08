@@ -1,5 +1,3 @@
-"""Fetch the Mojang version manifest and per-version JSON files."""
-
 import json
 from pathlib import Path
 

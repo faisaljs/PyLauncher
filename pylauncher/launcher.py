@@ -1,5 +1,4 @@
-"""The orchestrator: install and launch."""
-
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +20,25 @@ def list_installed(game_dir: Path) -> list:
         if d.is_dir() and (d / f"{d.name}.jar").exists():
             out.append(d.name)
     return out
+
+
+def detect_java_major(java: str):
+    try:
+        r = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=10)
+        text = r.stderr or r.stdout
+        m = re.search(r'version "(\d+)(?:\.(\d+))?', text)
+        if not m:
+            return None
+        major = int(m.group(1))
+        if major == 1 and m.group(2):
+            return int(m.group(2))
+        return major
+    except Exception:
+        return None
+
+
+def required_java_major(version_data: dict) -> int:
+    return version_data.get("javaVersion", {}).get("majorVersion", 8)
 
 
 def install(version_id: str, game_dir: Path = None, quiet: bool = False) -> None:
@@ -49,8 +67,6 @@ def install(version_id: str, game_dir: Path = None, quiet: bool = False) -> None
     a_cached, a_dl = download_assets(version_data, game_dir, verbose=not quiet)
     if not quiet:
         print(f"    {a_cached} cached, {a_dl} downloaded")
-
-    if not quiet:
         print(f"Done. {version_id} is ready to launch.")
 
 
@@ -74,6 +90,16 @@ def launch(
 
     manifest = fetch_manifest(game_dir)
     version_data = fetch_version(version_id, manifest, game_dir)
+
+    required = required_java_major(version_data)
+    actual = detect_java_major(java)
+    if actual is not None and actual < required:
+        print(
+            f"Warning: {version_id} requires Java {required}+, "
+            f"but '{java}' is Java {actual}. "
+            f"Use --java to point at a newer JDK.",
+            file=sys.stderr,
+        )
 
     uuid = offline_uuid(username)
     natives = game_dir / "natives" / version_id
